@@ -87,7 +87,6 @@
 </nav>
 </div>
 <div class="flex items-center gap-4">
-<!-- Live indicator -->
 <div class="flex items-center text-xs text-secondary font-bold">
 <span class="live-dot"></span> LIVE
 </div>
@@ -265,7 +264,6 @@
 <div>
 <h3 class="text-lg font-headline font-bold text-on-surface mb-6 px-1">Infrastructure Recommendations</h3>
 <div class="grid grid-cols-1 md:grid-cols-2 gap-6" id="recommendations-container">
-<!-- Populated by JS -->
 <div class="instance-card group bg-surface rounded-2xl transition-all duration-300 relative border border-outline flex flex-col justify-between p-6 overflow-hidden shadow-sm hover:shadow-md">
 <div class="reason-block bg-background text-white p-4 -mx-6 -mt-6 border-b border-outline">
 <p class="text-[11px] leading-relaxed"><span class="text-secondary font-bold">Reason:</span> CPU idle > 72h with zero memory pressure.</p>
@@ -386,7 +384,7 @@
 </div>
 <div class="bg-surface rounded-2xl p-6 border border-outline shadow-sm">
 <h3 class="font-headline font-bold text-on-surface mb-6">7-day Forecast</h3>
-<div class="flex items-end justify-between h-32 gap-2 mb-4 px-2">
+<div class="flex items-end justify-between h-32 gap-2 mb-4 px-2" id="forecast-bars">
 <div class="w-full bg-slate-800 rounded-t-lg h-[40%]"></div>
 <div class="w-full bg-slate-800 rounded-t-lg h-[65%]"></div>
 <div class="w-full bg-slate-800 rounded-t-lg h-[50%]"></div>
@@ -395,7 +393,7 @@
 <div class="w-full bg-slate-800 rounded-t-lg h-[30%]"></div>
 <div class="w-full bg-secondary rounded-t-lg h-[15%] shadow-sm"></div>
 </div>
-<div class="flex justify-between text-[10px] text-on-surface-variant uppercase font-bold tracking-tighter">
+<div class="flex justify-between text-[10px] text-on-surface-variant uppercase font-bold tracking-tighter" id="forecast-labels">
 <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
 </div>
 </div>
@@ -430,156 +428,151 @@
 </div>
 
 <script>
-    // ─── CONFIG ───────────────────────────────────────────────
-    const TELEMETRY_URL = "http://172.20.10.2:8000/telemetry";     // ✅ already correct
-    const EC2_URL       = "http://172.20.10.2:8000/api/ec2-status"; // 🆕 add this
-    const ANALYSIS_URL  = "http://172.20.10.2:8000/api/analysis";   // 🆕 add this
-    const ML_URL        = "http://172.20.10.3:8001/anomalies";      // ⏳ confirm ML server docs next   
+    // ─── CONFIG — points to your EC2 public IP ────────────────
+    const API_BASE      = "http://3.22.114.133:5000";
+    const ANALYSIS_URL  = `${API_BASE}/api/analysis`;
+    const EC2_URL       = `${API_BASE}/api/ec2-status`;
+    const ANOMALY_URL   = `${API_BASE}/api/trigger-anomaly`;
     // ──────────────────────────────────────────────────────────
 
-    async function fetchTelemetry() {
+    async function fetchAnalysis() {
         try {
-            const res = await fetch(TELEMETRY_URL);
+            const res  = await fetch(ANALYSIS_URL);
             const data = await res.json();
-            const records = data.records || [];
 
-            const running = records.filter(r => r.state === "running");
-            const idle = records.filter(r => r.cpu !== undefined && r.cpu < 15);
-            const avgCpu = running.length > 0
-                ? (running.reduce((s, r) => s + (r.cpu || 0), 0) / running.length).toFixed(1)
-                : 0;
-            const estSavings = (idle.length * 120).toLocaleString();
-
-            // Update metric cards
-            document.getElementById("active-instances").textContent = running.length || records.length;
-            document.getElementById("active-instances-sub").textContent = `${records.length} total instances tracked`;
-            document.getElementById("idle-instances").textContent = idle.length;
-            document.getElementById("idle-instances-sub").textContent = idle.length > 0 ? `${idle.length} underutilized` : "All instances healthy";
-            document.getElementById("avg-cpu").textContent = avgCpu;
-            document.getElementById("cpu-bar").style.width = avgCpu + "%";
-            document.getElementById("est-savings").textContent = "$" + estSavings;
-            document.getElementById("saved-today").textContent = "$" + (idle.length * 4.5).toFixed(2);
-
-            // Update live instances table
-            const tableDiv = document.getElementById("instances-table");
-            if (records.length === 0) {
-                tableDiv.innerHTML = '<div class="text-on-surface-variant text-sm text-center py-8">No instances found</div>';
-                return;
-            }
-            tableDiv.innerHTML = `
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr class="text-on-surface-variant text-xs uppercase border-b border-outline">
-                            <th class="text-left pb-3 font-bold">Instance ID</th>
-                            <th class="text-left pb-3 font-bold">State</th>
-                            <th class="text-left pb-3 font-bold">CPU %</th>
-                            <th class="text-left pb-3 font-bold">Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${records.map(r => `
-                            <tr class="border-b border-outline/50 hover:bg-slate-800/30 transition-colors">
-                                <td class="py-3 font-mono text-xs text-on-surface-variant">${r.instance_id}</td>
-                                <td class="py-3">
-                                    <span class="px-2 py-1 rounded-full text-[10px] font-bold ${r.state === 'running' ? 'bg-secondary/20 text-secondary' : 'bg-slate-700 text-on-surface-variant'}">
-                                        ${r.state}
-                                    </span>
-                                </td>
-                                <td class="py-3 font-bold ${r.cpu < 15 ? 'text-tertiary' : 'text-on-surface'}">${(r.cpu || 0).toFixed(2)}%</td>
-                                <td class="py-3 text-xs ${r.cpu < 15 ? 'text-tertiary font-bold' : 'text-secondary font-bold'}">
-                                    ${r.cpu < 15 ? '⚠ Idle' : '✓ Active'}
-                                </td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            `;
-
-            // Update alert
-            if (idle.length > 0) {
-                document.getElementById("alert-title").textContent = `${idle.length} idle instance(s) detected`;
-                document.getElementById("alert-body").textContent = `CPU below 15% threshold. Potential savings: $${estSavings}/mo`;
-            } else {
-                document.getElementById("alert-title").textContent = "All instances healthy";
-                document.getElementById("alert-body").textContent = "No anomalies detected in current scan.";
-            }
-
-        } catch (err) {
-            console.error("Telemetry fetch failed:", err);
-            document.getElementById("instances-table").innerHTML =
-                '<div class="text-tertiary text-sm text-center py-8">⚠ Could not connect to telemetry API. Make sure backend is running.</div>';
-        }
-    }
-
-    async function fetchAnomalies() {
-        const feedDiv = document.getElementById("anomaly-feed");
-        try {
-            const res = await fetch(ML_URL);
-            const data = await res.json();
+            const summary   = data.summary   || {};
             const anomalies = data.anomalies || [];
+            const forecast  = data.forecast  || [];
 
+            // Metric cards
+            document.getElementById("active-instances").textContent     = summary.total_days || "--";
+            document.getElementById("active-instances-sub").textContent = `${summary.total_days || 0} days monitored`;
+            document.getElementById("idle-instances").textContent       = summary.idle_count ?? "--";
+            document.getElementById("idle-instances-sub").textContent   = summary.idle_count > 0 ? `${summary.idle_count} underutilized` : "All instances healthy";
+            document.getElementById("avg-cpu").textContent              = summary.avg_cpu ?? "--";
+            document.getElementById("cpu-bar").style.width              = (summary.avg_cpu || 0) + "%";
+            document.getElementById("est-savings").textContent          = `₹${(summary.potential_saving || 0).toLocaleString()}`;
+            document.getElementById("saved-today").textContent          = `₹${((summary.potential_saving || 0) / 30).toFixed(2)}`;
+
+            // Instance table from metrics
+            const metrics   = data.metrics || [];
+            const tableDiv  = document.getElementById("instances-table");
+            if (metrics.length === 0) {
+                tableDiv.innerHTML = '<div class="text-on-surface-variant text-sm text-center py-8">No data available</div>';
+            } else {
+                tableDiv.innerHTML = `
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="text-on-surface-variant text-xs uppercase border-b border-outline">
+                                <th class="text-left pb-3 font-bold">Date</th>
+                                <th class="text-left pb-3 font-bold">CPU %</th>
+                                <th class="text-left pb-3 font-bold">Cost (₹)</th>
+                                <th class="text-left pb-3 font-bold">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${metrics.slice(-7).map(r => `
+                                <tr class="border-b border-outline/50 hover:bg-slate-800/30 transition-colors">
+                                    <td class="py-3 font-mono text-xs text-on-surface-variant">${r.date}</td>
+                                    <td class="py-3 font-bold ${r.cpu > 80 ? 'text-tertiary' : 'text-on-surface'}">${r.cpu}%</td>
+                                    <td class="py-3 font-bold text-on-surface">₹${r.cost}</td>
+                                    <td class="py-3 text-xs ${r.cpu < 35 ? 'text-tertiary font-bold' : 'text-secondary font-bold'}">
+                                        ${r.cpu < 35 ? '⚠ Idle' : r.cpu > 80 ? '🔴 Spike' : '✓ Normal'}
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+            }
+
+            // Anomaly feed
+            const feedDiv = document.getElementById("anomaly-feed");
             if (anomalies.length === 0) {
                 feedDiv.innerHTML = '<div class="text-secondary text-xs text-center py-4">✓ No anomalies detected</div>';
-                return;
+                document.getElementById("alert-title").textContent = "All systems normal";
+                document.getElementById("alert-body").textContent  = "No anomalies detected in current scan.";
+            } else {
+                feedDiv.innerHTML = anomalies.map(a => `
+                    <div class="flex items-start gap-3 p-3 bg-background rounded-xl border border-outline mb-3">
+                        <div class="w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${a.severity === 'critical' ? 'bg-tertiary' : 'bg-yellow-500'}"></div>
+                        <div>
+                            <p class="text-xs font-bold text-on-surface">${a.date}</p>
+                            <p class="text-[10px] text-on-surface-variant mt-0.5">${a.explanation}</p>
+                            <p class="text-[10px] text-tertiary font-bold mt-1">CPU: ${a.cpu}% | Cost: ₹${a.cost}</p>
+                        </div>
+                    </div>
+                `).join('');
+
+                const top = anomalies[0];
+                document.getElementById("alert-title").textContent = `${anomalies.length} anomaly detected!`;
+                document.getElementById("alert-body").textContent  = top.explanation;
             }
 
-            feedDiv.innerHTML = anomalies.map(a => `
-                <div class="flex items-start gap-3 p-3 bg-background rounded-xl border border-outline mb-3">
-                    <div class="w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${a.is_anomaly ? 'bg-tertiary' : 'bg-secondary'}"></div>
-                    <div>
-                        <p class="text-xs font-bold text-on-surface font-mono">${a.instance_id}</p>
-                        <p class="text-[10px] text-on-surface-variant mt-0.5">${a.reason || 'Anomaly detected by ML model'}</p>
-                        <p class="text-[10px] text-tertiary font-bold mt-1">CPU: ${(a.cpu || 0).toFixed(2)}%</p>
-                    </div>
-                </div>
-            `).join('');
+            // Forecast bars
+            if (forecast.length > 0) {
+                const maxVal = Math.max(...forecast.map(f => f.projected));
+                document.getElementById("forecast-bars").innerHTML = forecast.map(f => {
+                    const pct = Math.round((f.projected / maxVal) * 100);
+                    const color = f.risk === 'high' ? 'bg-tertiary' : 'bg-secondary';
+                    return `<div class="w-full ${color} rounded-t-lg" style="height:${pct}%"></div>`;
+                }).join('');
+                document.getElementById("forecast-labels").innerHTML = forecast.map(f => {
+                    const d = new Date(f.date);
+                    return `<span>${d.toLocaleDateString('en', {weekday:'short'})}</span>`;
+                }).join('');
+            }
+
         } catch (err) {
-            feedDiv.innerHTML = '<div class="text-on-surface-variant text-xs text-center py-4">ML endpoint not connected yet</div>';
+            console.error("Analysis fetch failed:", err);
+            document.getElementById("instances-table").innerHTML =
+                '<div class="text-tertiary text-sm text-center py-8">⚠ Could not connect to backend API.</div>';
+            document.getElementById("anomaly-feed").innerHTML =
+                '<div class="text-on-surface-variant text-xs text-center py-4">Backend not connected</div>';
         }
     }
 
     async function fetchAllData() {
-        await fetchTelemetry();
-        await fetchAnomalies();
+        await fetchAnalysis();
     }
 
     // CPU Slider
-    const slider = document.getElementById('cpu-slider');
+    const slider      = document.getElementById('cpu-slider');
     const sliderLabel = document.getElementById('slider-label');
     const optimizedPath = document.querySelector('path[stroke="#059669"]');
     const optimizedFill = document.querySelector('path[fill="url(#colorOptimized)"]');
-    const currentPath = document.querySelector('path[stroke="#ef4444"]');
-    const currentFill = document.querySelector('path[fill="url(#colorCurrent)"]');
+    const currentPath   = document.querySelector('path[stroke="#ef4444"]');
+    const currentFill   = document.querySelector('path[fill="url(#colorCurrent)"]');
 
     if (slider) {
         slider.addEventListener('input', (e) => {
             const value = parseInt(e.target.value);
             sliderLabel.textContent = value + '%';
-            const baseThreshold = 15;
+            const baseThreshold  = 15;
             const optimizedShift = (value - baseThreshold) * 0.4;
-            const currentShift = (value - baseThreshold) * 0.1;
-            const transition = 'transform 0.1s ease-out';
+            const currentShift   = (value - baseThreshold) * 0.1;
+            const transition     = 'transform 0.1s ease-out';
             [optimizedPath, optimizedFill, currentPath, currentFill].forEach((el, i) => {
                 if (el) {
                     el.style.transition = transition;
-                    el.style.transform = `translateY(${i < 2 ? optimizedShift : currentShift}px)`;
+                    el.style.transform  = `translateY(${i < 2 ? optimizedShift : currentShift}px)`;
                 }
             });
         });
     }
 
     // Alert dismiss
-    const alertBox = document.getElementById('cost-spike-alert');
+    const alertBox  = document.getElementById('cost-spike-alert');
     const ignoreBtn = document.getElementById('ignore-alert-btn');
     if (ignoreBtn && alertBox) {
         ignoreBtn.addEventListener('click', () => alertBox.style.display = 'none');
     }
 
     // Sleep mode toggle
-    const userModeBtn = document.getElementById('user-mode-btn');
-    const autoModeBtn = document.getElementById('auto-mode-btn');
+    const userModeBtn  = document.getElementById('user-mode-btn');
+    const autoModeBtn  = document.getElementById('auto-mode-btn');
     const manualInputs = document.getElementById('sleep-mode-manual-inputs');
-    const autoMsg = document.getElementById('sleep-mode-auto-msg');
+    const autoMsg      = document.getElementById('sleep-mode-auto-msg');
 
     function setSleepMode(mode) {
         if (mode === 'user') {
